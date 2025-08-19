@@ -33,7 +33,6 @@ def order_months(df, col="MES"):
     return df.dropna(subset=["MES_NUM"]).sort_values(["MES_NUM"])
 
 def find_local_file(candidates):
-    """Tenta achar arquivo na raiz e em ./data/ (retorna primeiro que existir)."""
     for name in candidates:
         if os.path.exists(name):
             return name
@@ -196,13 +195,14 @@ df_adm_f = df_adm[df_adm["MES"].isin(meses_sel)].copy() if meses_sel else df_adm
 # =========================
 tabs = st.tabs(["📈 Visão Geral (Secretarias)", "⚖️ Administração x Demais", "🏛️ Administração por Beneficiário", "📄 Tabelas / Exportar"])
 
-# Aba 1
+# Aba 1 — Visão Geral (Secretarias)
 with tabs[0]:
     st.markdown("### 📈 Gastos por Secretaria (mensal)")
     if df_all_f.empty:
         st.info("Sem dados para exibir.")
     else:
-        plot_df = (df_all_f[df_all_f["SECRETARIA"].isin(secs_sel)] if secs_sel else df_all_f).groupby(["MES","SECRETARIA"], as_index=False)["VALOR"].sum()
+        plot_df = (df_all_f[df_all_f["SECRETARIA"].isin(secs_sel)] if secs_sel else df_all_f)\
+                    .groupby(["MES","SECRETARIA"], as_index=False)["VALOR"].sum()
         plot_df = order_months(plot_df, "MES")
 
         fig = px.line(plot_df, x="MES", y="VALOR", color="SECRETARIA", markers=True, title="Evolução Mensal por Secretaria")
@@ -214,12 +214,35 @@ with tabs[0]:
         fig2.update_layout(yaxis_title="Valor (R$)")
         st.plotly_chart(fig2, use_container_width=True)
 
+        # Ranking acumulado
         rank_df = plot_df.groupby("SECRETARIA", as_index=False)["VALOR"].sum().sort_values("VALOR", ascending=False).head(topn)
         rank_df["VALOR_fmt"] = rank_df["VALOR"].map(format_brl)
         st.markdown("#### 🔝 Ranking (soma nos meses filtrados)")
         st.dataframe(rank_df[["SECRETARIA","VALOR_fmt"]], use_container_width=True, hide_index=True)
 
-# Aba 2
+        # >>> NOVO: Tabela completa por secretaria (colunas = meses) + TOTAL e TOTAL GERAL
+        st.markdown("#### 🧮 Tabela — Valores por Secretaria (meses filtrados)")
+        tbl = df_all_f.groupby(["SECRETARIA","MES"], as_index=False)["VALOR"].sum()
+        tbl = order_months(tbl, "MES")
+        pivot = tbl.pivot(index="SECRETARIA", columns="MES", values="VALOR").fillna(0.0)
+
+        # ordena colunas por mês
+        ordered_cols = sorted(pivot.columns, key=lambda m: MONTH_TO_NUM.get(m, 99))
+        pivot = pivot[ordered_cols]
+
+        # total por secretaria e total geral
+        pivot["TOTAL"] = pivot.sum(axis=1)
+        total_row = pd.DataFrame(pivot.sum(axis=0)).T
+        total_row.index = ["TOTAL GERAL"]
+
+        pivot_total = pd.concat([pivot, total_row], axis=0)
+
+        display = pivot_total.applymap(lambda v: format_brl(v))
+        st.dataframe(display, use_container_width=True)
+
+        st.markdown(f"**Soma de todas as Secretarias (meses filtrados): {format_brl(pivot['TOTAL'].sum())}**")
+
+# Aba 2 — Administração x Demais
 with tabs[1]:
     st.markdown("### ⚖️ Administração vs Demais Secretarias")
     if df_all_f.empty:
@@ -247,7 +270,7 @@ with tabs[1]:
             base_show[c] = base_show[c].map(format_brl)
         st.dataframe(base_show, use_container_width=True, hide_index=True)
 
-# Aba 3
+# Aba 3 — Administração por Beneficiário
 with tabs[2]:
     st.markdown("### 🏛️ Administração — Detalhe por Beneficiário")
     if df_adm_f.empty:
@@ -271,8 +294,17 @@ with tabs[2]:
         fig.update_layout(yaxis_title="Valor (R$)")
         st.plotly_chart(fig, use_container_width=True)
 
-        rank_mes = df_adm_f[df_adm_f["MES"] == mes_unico].groupby("BENEFICIARIO", as_index=False)["VALOR"].sum().sort_values("VALOR", ascending=False).head(topn)
-        fig_bar = px.bar(rank_mes, x="BENEFICIARIO", y="VALOR", title=f"Top {topn} no mês {mes_unico}", text_auto=True)
+        # Top N no mês selecionado — >>> rótulos em REAIS <<<
+        rank_mes = df_adm_f[df_adm_f["MES"] == mes_unico].groupby("BENEFICIARIO", as_index=False)["VALOR"].sum()
+        rank_mes = rank_mes.sort_values("VALOR", ascending=False).head(topn)
+        rank_mes["VALOR_fmt"] = rank_mes["VALOR"].map(format_brl)
+
+        fig_bar = px.bar(
+            rank_mes, x="BENEFICIARIO", y="VALOR",
+            title=f"Top {topn} no mês {mes_unico}",
+            text="VALOR_fmt"
+        )
+        fig_bar.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
         fig_bar.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
         st.plotly_chart(fig_bar, use_container_width=True)
 
@@ -281,7 +313,7 @@ with tabs[2]:
         st.markdown("#### 🔝 Ranking acumulado (meses filtrados)")
         st.dataframe(total_ben[["BENEFICIARIO","VALOR_fmt"]], use_container_width=True, hide_index=True)
 
-# Aba 4
+# Aba 4 — Tabelas e Exportação
 with tabs[3]:
     st.markdown("### 📄 Dados e Exportação")
     colx1, colx2 = st.columns(2)
