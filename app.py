@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-# app.py — Comparativo de Gastos por Secretaria e Administração
+# app.py — Comparativo de Gastos por Secretaria e Administração (Departamentos)
 # Requisitos: streamlit, pandas, openpyxl, plotly
 
 import io
@@ -51,22 +51,19 @@ def load_all_secretarias_from_planilha1(xlsx_file) -> pd.DataFrame:
         df_raw.iloc[:, 0].astype(str).str.upper().str.contains("MÊS", na=False)
     ].tolist()
     header_idx = header_idx_candidates[0] if header_idx_candidates else 1
-
     df = df_raw.iloc[header_idx+1:, 0:3].copy()
     df.columns = ["MES", "SECRETARIA", "VALOR"]
 
     df["MES"] = df["MES"].apply(normalize_text)
     df["SECRETARIA"] = df["SECRETARIA"].apply(normalize_text)
     df["VALOR"] = pd.to_numeric(df["VALOR"], errors="coerce").fillna(0.0)
-
     df = df.dropna(subset=["MES", "SECRETARIA"], how="any")
-    df = order_months(df, "MES")
-    return df
+    return order_months(df, "MES")
 
 @st.cache_data(show_spinner=False)
 def load_admin_departments(xlsx_file) -> pd.DataFrame:
+    # Aba GERAL: 2ª coluna “BENEFICIARIO”, demais colunas = meses
     df_raw = pd.read_excel(xlsx_file, sheet_name="GERAL", header=None)
-
     head_idx_candidates = df_raw.index[
         df_raw.iloc[:, 1].astype(str).str.upper().str.contains("BENEFICIARIO", na=False)
     ].tolist()
@@ -81,7 +78,6 @@ def load_admin_departments(xlsx_file) -> pd.DataFrame:
     header_row = df_raw.iloc[head_idx].tolist()
     df = df_raw.iloc[head_idx+1:, :len(header_row)].copy()
     df.columns = [normalize_text(c) for c in header_row]
-
     cols = [c for c in df.columns if c and c != "NAN"]
     df = df[cols].copy()
 
@@ -91,14 +87,12 @@ def load_admin_departments(xlsx_file) -> pd.DataFrame:
     ben_col = ben_col_candidates[0]
 
     month_cols = [c for c in df.columns if c != ben_col]
-    mapping_cols = {}
-    month_cols_norm = []
+    mapping_cols, month_cols_norm = {}, []
     for c in month_cols:
         c_norm = normalize_text(c)
         if c_norm in MONTH_ORDER:
             month_cols_norm.append(c_norm)
             mapping_cols[c] = c_norm
-
     if not month_cols_norm:
         return pd.DataFrame(columns=["BENEFICIARIO", "MES", "VALOR"])
 
@@ -129,14 +123,8 @@ st.sidebar.caption("Envie as planilhas ou deixe os arquivos no repositório (rai
 default_all = find_local_file(["COMBUSTIVEL 2025.xlsx"])
 default_admin = find_local_file(["Combustivel POR SECRETARIA.xlsx"])
 
-uploaded_all = st.sidebar.file_uploader(
-    "Planilha de TODAS as Secretarias (aba 'Planilha1')",
-    type=["xlsx"], key="all_xlsx"
-)
-uploaded_admin = st.sidebar.file_uploader(
-    "Planilha da Administração + Departamentos (aba 'GERAL')",
-    type=["xlsx"], key="admin_xlsx"
-)
+uploaded_all = st.sidebar.file_uploader("Planilha de TODAS as Secretarias (aba 'Planilha1')", type=["xlsx"], key="all_xlsx")
+uploaded_admin = st.sidebar.file_uploader("Planilha da Administração + Departamentos (aba 'GERAL')", type=["xlsx"], key="admin_xlsx")
 
 all_source = uploaded_all if uploaded_all is not None else default_all
 adm_source = uploaded_admin if uploaded_admin is not None else default_admin
@@ -145,7 +133,7 @@ adm_source = uploaded_admin if uploaded_admin is not None else default_admin
 # Título
 # =========================
 st.title("📊 Comparativo de Gastos")
-st.caption("Totais por Secretaria + Detalhamento da Secretaria de Administração e beneficiários/departamentos.")
+st.caption("Totais por Secretaria + Detalhamento da Secretaria de Administração (beneficiários/departamentos).")
 
 # =========================
 # Carrega dados
@@ -166,9 +154,9 @@ df_all = load_all_secretarias_from_planilha1(all_source) if all_source else pd.D
 df_adm = load_admin_departments(adm_source) if adm_source else pd.DataFrame(columns=["BENEFICIARIO","MES","VALOR","MES_NUM"])
 
 # =========================
-# Filtros
+# Filtros globais (usados na Visão Geral e Administração x Demais)
 # =========================
-st.subheader("🔎 Filtros")
+st.subheader("🔎 Filtros (globais)")
 colf1, colf2, colf3 = st.columns([1.2, 1.7, 1.1])
 
 meses_disponiveis = sorted(
@@ -188,14 +176,21 @@ with colf3:
     topn = st.number_input("Top N (ranking)", min_value=3, max_value=30, value=10, step=1)
 
 df_all_f = df_all[df_all["MES"].isin(meses_sel)].copy() if meses_sel else df_all.copy()
-df_adm_f = df_adm[df_adm["MES"].isin(meses_sel)].copy() if meses_sel else df_adm.copy()
+df_adm_global = df_adm[df_adm["MES"].isin(meses_sel)].copy() if meses_sel else df_adm.copy()
 
 # =========================
 # Abas
 # =========================
-tabs = st.tabs(["📈 Visão Geral (Secretarias)", "⚖️ Administração x Demais", "🏛️ Administração por Beneficiário", "📄 Tabelas / Exportar"])
+tabs = st.tabs([
+    "📈 Visão Geral (Secretarias)",
+    "⚖️ Administração x Demais",
+    "🏛️ Administração por Beneficiário",
+    "📄 Tabelas / Exportar"
+])
 
+# -----------------------------------------------------------------------------
 # Aba 1 — Visão Geral (Secretarias)
+# -----------------------------------------------------------------------------
 with tabs[0]:
     st.markdown("### 📈 Gastos por Secretaria (mensal)")
     if df_all_f.empty:
@@ -220,31 +215,27 @@ with tabs[0]:
         st.markdown("#### 🔝 Ranking (soma nos meses filtrados)")
         st.dataframe(rank_df[["SECRETARIA","VALOR_fmt"]], use_container_width=True, hide_index=True)
 
-        # >>> NOVO: Tabela completa por secretaria (colunas = meses) + TOTAL e TOTAL GERAL
+        # Tabela completa com TOTAL e TOTAL GERAL
         st.markdown("#### 🧮 Tabela — Valores por Secretaria (meses filtrados)")
         tbl = df_all_f.groupby(["SECRETARIA","MES"], as_index=False)["VALOR"].sum()
         tbl = order_months(tbl, "MES")
         pivot = tbl.pivot(index="SECRETARIA", columns="MES", values="VALOR").fillna(0.0)
-
-        # ordena colunas por mês
         ordered_cols = sorted(pivot.columns, key=lambda m: MONTH_TO_NUM.get(m, 99))
-        pivot = pivot[ordered_cols]
-
-        # total por secretaria e total geral
+        pivot = pivot[ordered_cols] if len(pivot.columns) else pivot
         pivot["TOTAL"] = pivot.sum(axis=1)
         total_row = pd.DataFrame(pivot.sum(axis=0)).T
         total_row.index = ["TOTAL GERAL"]
-
         pivot_total = pd.concat([pivot, total_row], axis=0)
-
         display = pivot_total.applymap(lambda v: format_brl(v))
         st.dataframe(display, use_container_width=True)
+        st.markdown(f"**Soma de todas as Secretarias (meses filtrados): {format_brl(pivot['TOTAL'].sum() if 'TOTAL' in pivot.columns else 0)}**")
 
-        st.markdown(f"**Soma de todas as Secretarias (meses filtrados): {format_brl(pivot['TOTAL'].sum())}**")
-
+# -----------------------------------------------------------------------------
 # Aba 2 — Administração x Demais
+# -----------------------------------------------------------------------------
 with tabs[1]:
     st.markdown("### ⚖️ Administração vs Demais Secretarias")
+    st.info("Comparação mensal entre a soma **da Secretaria de Administração** e a soma **de todas as outras** secretarias.")
     if df_all_f.empty:
         st.info("Sem dados para exibir.")
     else:
@@ -254,7 +245,6 @@ with tabs[1]:
         base["ADMINISTRAÇÃO"] = base["ADMINISTRAÇÃO"].fillna(0.0)
         base["DEMAIS"] = (base["TOTAL"] - base["ADMINISTRAÇÃO"]).clip(lower=0)
         base = order_months(base, "MES")
-
         base_long = base.melt(id_vars=["MES","MES_NUM"], value_vars=["ADMINISTRAÇÃO","DEMAIS"], var_name="GRUPO", value_name="VALOR")
 
         fig = px.bar(base_long, x="MES", y="VALOR", color="GRUPO", barmode="group", title="Administração x Demais (por mês)")
@@ -270,68 +260,109 @@ with tabs[1]:
             base_show[c] = base_show[c].map(format_brl)
         st.dataframe(base_show, use_container_width=True, hide_index=True)
 
-# Aba 3 — Administração por Beneficiário
+# -----------------------------------------------------------------------------
+# Aba 3 — Administração por Beneficiário (ENXUTA + filtros locais)
+# -----------------------------------------------------------------------------
 with tabs[2]:
     st.markdown("### 🏛️ Administração — Detalhe por Beneficiário")
-    if df_adm_f.empty:
+    if df_adm.empty:
         st.info("Sem dados da Administração + Departamentos.")
     else:
-        beneficiarios = sorted(df_adm_f["BENEFICIARIO"].unique().tolist())
-        colb1, colb2 = st.columns([1.5, 2])
-        with colb1:
-            bens_sel = st.multiselect("Beneficiários/Departamentos", options=beneficiarios, default=beneficiarios[:10])
-        with colb2:
-            mes_unico = st.selectbox("Mês para ranking", options=meses_sel if meses_sel else sorted(df_adm_f["MES"].unique(), key=lambda m: MONTH_TO_NUM.get(m, 99)))
+        # ----- Filtros locais específicos desta aba -----
+        col_local_1, col_local_2 = st.columns([1.3, 1.7])
+        meses_adm_all = sorted(df_adm["MES"].dropna().unique().tolist(), key=lambda m: MONTH_TO_NUM.get(m, 99))
+        beneficiarios_all = sorted(df_adm["BENEFICIARIO"].dropna().unique().tolist())
 
-        df_plot = df_adm_f.copy()
+        with col_local_1:
+            all_months_ck = st.checkbox("Selecionar todos os meses (Administração)", value=True, key="adm_ck_all_months")
+        if all_months_ck:
+            meses_sel_adm = meses_adm_all
+        else:
+            meses_sel_adm = st.multiselect("Meses (Administração)", options=meses_adm_all, default=meses_adm_all)
+
+        with col_local_2:
+            all_bens_ck = st.checkbox("Selecionar todos os beneficiários", value=True, key="adm_ck_all_bens")
+        if all_bens_ck:
+            bens_sel = beneficiarios_all
+        else:
+            bens_sel = st.multiselect("Beneficiários/Departamentos", options=beneficiarios_all, default=beneficiarios_all[:10])
+
+        # Aplica filtros locais
+        df_adm_tab = df_adm[df_adm["MES"].isin(meses_sel_adm)].copy()
         if bens_sel:
-            df_plot = df_plot[df_plot["BENEFICIARIO"].isin(bens_sel)]
+            df_adm_tab = df_adm_tab[df_adm_tab["BENEFICIARIO"].isin(bens_sel)]
 
-        df_plot = df_plot.groupby(["MES","BENEFICIARIO"], as_index=False)["VALOR"].sum()
-        df_plot = order_months(df_plot, "MES")
+        # ======= Top N por um mês específico (com rótulos em R$) =======
+        if meses_sel_adm:
+            mes_unico_adm = st.selectbox("Mês para Top N", options=meses_sel_adm, index=0)
+            rank_mes = df_adm[df_adm["MES"] == mes_unico_adm].groupby("BENEFICIARIO", as_index=False)["VALOR"].sum()
+            rank_mes = rank_mes[rank_mes["BENEFICIARIO"].isin(bens_sel)] if bens_sel else rank_mes
+            rank_mes = rank_mes.sort_values("VALOR", ascending=False).head(int(topn))
+            rank_mes["VALOR_fmt"] = rank_mes["VALOR"].map(format_brl)
 
-        fig = px.line(df_plot, x="MES", y="VALOR", color="BENEFICIARIO", markers=True, title="Evolução Mensal por Beneficiário (Administração)")
-        fig.update_layout(yaxis_title="Valor (R$)")
-        st.plotly_chart(fig, use_container_width=True)
+            fig_bar = px.bar(
+                rank_mes, x="BENEFICIARIO", y="VALOR",
+                title=f"Top {topn} no mês {mes_unico_adm}",
+                text="VALOR_fmt"
+            )
+            fig_bar.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
+            fig_bar.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
+            st.plotly_chart(fig_bar, use_container_width=True)
 
-        # Top N no mês selecionado — >>> rótulos em REAIS <<<
-        rank_mes = df_adm_f[df_adm_f["MES"] == mes_unico].groupby("BENEFICIARIO", as_index=False)["VALOR"].sum()
-        rank_mes = rank_mes.sort_values("VALOR", ascending=False).head(topn)
-        rank_mes["VALOR_fmt"] = rank_mes["VALOR"].map(format_brl)
-
-        fig_bar = px.bar(
-            rank_mes, x="BENEFICIARIO", y="VALOR",
-            title=f"Top {topn} no mês {mes_unico}",
-            text="VALOR_fmt"
-        )
-        fig_bar.update_traces(texttemplate="%{text}", textposition="outside", cliponaxis=False)
-        fig_bar.update_layout(xaxis_title="", yaxis_title="Valor (R$)")
-        st.plotly_chart(fig_bar, use_container_width=True)
-
-        total_ben = df_adm_f.groupby("BENEFICIARIO", as_index=False)["VALOR"].sum().sort_values("VALOR", ascending=False).head(topn)
+        # ======= Ranking acumulado nos meses selecionados =======
+        st.markdown("#### 🔝 Ranking acumulado (meses selecionados)")
+        total_ben = df_adm_tab.groupby("BENEFICIARIO", as_index=False)["VALOR"].sum().sort_values("VALOR", ascending=False).head(int(topn))
         total_ben["VALOR_fmt"] = total_ben["VALOR"].map(format_brl)
-        st.markdown("#### 🔝 Ranking acumulado (meses filtrados)")
         st.dataframe(total_ben[["BENEFICIARIO","VALOR_fmt"]], use_container_width=True, hide_index=True)
 
-# Aba 4 — Tabelas e Exportação
+        # ======= Tabela pivô por beneficiário (meses selecionados) + TOTAL e TOTAL GERAL =======
+        st.markdown("#### 🧮 Tabela — Beneficiário x Mês (Administração)")
+        tbl_adm = df_adm_tab.groupby(["BENEFICIARIO","MES"], as_index=False)["VALOR"].sum()
+        if not tbl_adm.empty:
+            tbl_adm = order_months(tbl_adm, "MES")
+            pvt = tbl_adm.pivot(index="BENEFICIARIO", columns="MES", values="VALOR").fillna(0.0)
+            ordered_cols = sorted(pvt.columns, key=lambda m: MONTH_TO_NUM.get(m, 99))
+            pvt = pvt[ordered_cols] if len(pvt.columns) else pvt
+            pvt["TOTAL"] = pvt.sum(axis=1)
+            total_row = pd.DataFrame(pvt.sum(axis=0)).T
+            total_row.index = ["TOTAL GERAL"]
+            pvt_total = pd.concat([pvt, total_row], axis=0)
+
+            st.dataframe(pvt_total.applymap(lambda v: format_brl(v)), use_container_width=True)
+
+            # download
+            buffer = io.BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                pvt_total.to_excel(writer, sheet_name="administracao_pivo", index=True)
+            st.download_button("⬇️ Baixar Excel (Pivô Administração)", data=buffer.getvalue(),
+                               file_name="administracao_pivo.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        else:
+            st.info("Sem dados para a combinação de filtros.")
+
+# -----------------------------------------------------------------------------
+# Aba 4 — Tabelas / Exportar (brutos filtrados globais)
+# -----------------------------------------------------------------------------
 with tabs[3]:
     st.markdown("### 📄 Dados e Exportação")
     colx1, colx2 = st.columns(2)
     with colx1:
-        st.markdown("**Secretarias (filtrado):**")
+        st.markdown("**Secretarias (filtrado global):**")
         show_all = df_all_f.copy()
         show_all["VALOR"] = show_all["VALOR"].round(2)
         st.dataframe(show_all, use_container_width=True, hide_index=True)
         if not show_all.empty:
             x1 = df_download_excel(show_all, "secretarias_filtrado.xlsx")
-            st.download_button("⬇️ Baixar Excel (Secretarias)", data=x1, file_name="secretarias_filtrado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("⬇️ Baixar Excel (Secretarias)", data=x1, file_name="secretarias_filtrado.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     with colx2:
-        st.markdown("**Administração (filtrado):**")
-        show_adm = df_adm_f.copy()
+        st.markdown("**Administração (filtrado global):**")
+        show_adm = df_adm_global.copy()
         show_adm["VALOR"] = show_adm["VALOR"].round(2)
         st.dataframe(show_adm, use_container_width=True, hide_index=True)
         if not show_adm.empty:
             x2 = df_download_excel(show_adm, "administracao_filtrado.xlsx")
-            st.download_button("⬇️ Baixar Excel (Administração)", data=x2, file_name="administracao_filtrado.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button("⬇️ Baixar Excel (Administração)", data=x2, file_name="administracao_filtrado.xlsx",
+                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-st.caption("Coloque as planilhas na raiz ou em /data, ou faça upload na barra lateral.")
+st.caption("Na aba 'Administração por Beneficiário', use os filtros locais para controlar meses e beneficiários. Gráficos exibem valores em reais.")
